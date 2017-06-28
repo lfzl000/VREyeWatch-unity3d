@@ -18,13 +18,13 @@ unity5.5.0f3 vs2017
 	HighLightColor:	高光的颜色
 	LaterMask:		选择屏蔽层
 	WatchTime:		注视时间，单位秒
-### WatchEvent - 注视事件###
+### WatchEvent - 注视事件 ###
 	挂在需要注视事件的物体上
 	OnWatchEnter:	注视点进入
 	OnWatchExit:	注视点移出
 	OnWatchUpdate:	注视点在物体上
 	OnWatch:		注视N秒后（N指WatchController的WatchTime）
-### WatchGameobject - 被注视物体###
+### WatchGameobject - 被注视物体 ###
 	不用手动去挂，程序运行后会挂在被注视的物体上
 	主要负责处理物体被注视后事件的注册
 ### TimerTool - 计时器工具 ###
