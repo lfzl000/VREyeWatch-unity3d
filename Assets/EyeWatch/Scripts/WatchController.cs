@@ -9,7 +9,7 @@ public class WatchController : MonoBehaviour
     public GameObject point;    //实例化的点
     public Transform pointDefault;  //默认点的位置
     public Color highLightColor;    //选中的物体高光的颜色
-    public float distance;          //眼睛看的距离
+    private float distance;          //眼睛看的距离
     public LayerMask layerMask;     //屏蔽的层
     public float watchTime = 2;     //注视时间
 
