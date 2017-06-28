@@ -34,5 +34,7 @@ unity5.5.0f3 vs2017
 案例场景在EyeWatch-Example-Scenes,可以自己看一下怎么用
 
 注视事件除了拖拽，还可以用代码注册
+
 `WatchEvent we;`
+
 `we.onWacth.AddListener(delegate { Test(); });`
