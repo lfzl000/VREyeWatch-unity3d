@@ -11,6 +11,7 @@ public class WatchController : MonoBehaviour
     public Color highLightColor;    //选中的物体高光的颜色
     public float distance;          //眼睛看的距离
     public LayerMask layerMask;     //屏蔽的层
+    public float watchTime = 2;     //注视时间
 
     private void Start()
     {

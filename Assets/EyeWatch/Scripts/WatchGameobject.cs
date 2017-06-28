@@ -4,32 +4,48 @@ using UnityEngine;
 
 public class WatchGameobject : MonoBehaviour
 {
-    TimerTool t;
+    private TimerTool t;
+    private WatchEvent w;
+    private WatchController wc;
 
-    void OnEnable()
+    private void Awake()
+    {
+        w = GetComponent<WatchEvent>();
+        wc = FindObjectOfType<WatchController>();
+    }
+
+    private void Update()
+    {
+        if (w)
+            w.onWatchUpdate.Invoke();
+    }
+
+    private void OnEnable()
     {
         t = TimerTool.CreateTimer();
-        t.StartTiming(2, StartTimer, EndTimer);
+        t.StartTiming(wc.watchTime, StartTimer, EndTimer);
     }
 
     public void StartTimer()
     {
-        Debug.Log("Start");
+        if (w)
+            w.onWatchEnter.Invoke();
     }
 
     public void EndTimer()
     {
-        Debug.Log("点击" + gameObject.name);
+        if (w)
+            w.onWatch.Invoke();
     }
 
     private void OnDisable()
     {
+        if (w)
+            w.onWatchExit.Invoke();
         if (t)
         {
             t.PauseTimer();
             t.Destory();
         }
     }
-
-
 }
