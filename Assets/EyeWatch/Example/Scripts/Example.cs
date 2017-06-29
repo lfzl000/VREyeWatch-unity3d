@@ -36,7 +36,7 @@ public class Example : MonoBehaviour
 
     public void WatchOn()
     {
-        //Debug.Log("注视两秒了");
+        Debug.Log("注视事件触发了");
         t_M.color = Color.blue;
     }
 }

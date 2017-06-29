@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using HighlightingSystem;
+using UnityEngine.UI;
 
 public class WatchController : MonoBehaviour
 {
@@ -12,11 +13,20 @@ public class WatchController : MonoBehaviour
     private float distance;          //眼睛看的距离
     public LayerMask layerMask;     //屏蔽的层
     public float watchTime = 2;     //注视时间
+    [HideInInspector]
+    public Image markCircle;    //提示圈
 
     private void Start()
     {
         p = Instantiate(point, pointDefault.position, Quaternion.identity, pointDefault);
         distance = eye.farClipPlane;
+        try
+        {
+            markCircle = p.transform.FindChild("Canvas/markCircle").GetComponent<Image>();
+        }
+        catch (System.Exception)
+        {
+        }
     }
 
     void Update()

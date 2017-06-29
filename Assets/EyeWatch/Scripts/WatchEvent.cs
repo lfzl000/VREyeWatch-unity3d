@@ -5,8 +5,8 @@ using UnityEngine.Events;
 
 public class WatchEvent : MonoBehaviour
 {
-    public UnityEvent onWatchEnter;
-    public UnityEvent onWatchExit;
-    public UnityEvent onWatchUpdate;
-    public UnityEvent onWatch;
+    public UnityEvent onWatchEnter = new UnityEvent();
+    public UnityEvent onWatchExit = new UnityEvent();
+    public UnityEvent onWatchUpdate = new UnityEvent();
+    public UnityEvent onWatch = new UnityEvent();
 }

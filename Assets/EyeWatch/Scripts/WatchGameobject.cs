@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -23,7 +24,7 @@ public class WatchGameobject : MonoBehaviour
     private void OnEnable()
     {
         t = TimerTool.CreateTimer();
-        t.StartTiming(wc.watchTime, StartTimer, EndTimer);
+        t.StartTiming(wc.watchTime, StartTimer, EndTimer, MarkCircle);
     }
 
     public void StartTimer()
@@ -47,5 +48,13 @@ public class WatchGameobject : MonoBehaviour
             t.PauseTimer();
             t.Destory();
         }
+        if (wc.markCircle)
+            wc.markCircle.fillAmount = 0;
+    }
+
+    private void MarkCircle(float t)
+    {
+        if (wc.markCircle)
+            wc.markCircle.fillAmount = t;
     }
 }
