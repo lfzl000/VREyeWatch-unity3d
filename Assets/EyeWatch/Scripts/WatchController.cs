@@ -54,6 +54,14 @@ public class WatchController : MonoBehaviour
             if (h == null)
                 h = hit.transform.gameObject.AddComponent<Highlighter>();
             h.On(highLightColor);
+
+            WatchEvent w = hit.transform.GetComponent<WatchEvent>();
+            if (w == null)
+            {
+                w = hit.transform.gameObject.AddComponent<WatchEvent>();
+                w.onWatch.AddListener(delegate { WatchButton(w.gameObject); });
+            }
+
             lg = hit.transform.GetComponent<WatchGameobject>();
             if (hit.transform.gameObject == lastHit)
             {
@@ -82,6 +90,13 @@ public class WatchController : MonoBehaviour
             if (lg)
                 lg.enabled = false;
         }
+    }
+
+    private void WatchButton(GameObject sender)
+    {
+        var b = sender.GetComponent<Button>();
+        if (b)
+            b.onClick.Invoke();
     }
 
 }
