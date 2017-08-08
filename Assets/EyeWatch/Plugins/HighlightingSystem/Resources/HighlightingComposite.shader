@@ -1,4 +1,4 @@
-﻿Shader "Hidden/Highlighted/Composite"
+Shader "Hidden/Highlighted/Composite"
 {
 	Properties
 	{
@@ -24,7 +24,7 @@
 			
 			struct v2f
 			{
-				float4 pos : POSITION;
+				float4 pos : SV_POSITION;
 				half2 uv0 : TEXCOORD0;
 				half2 uv1 : TEXCOORD1;
 			};
@@ -53,7 +53,7 @@
 				return o;
 			}
 			
-			fixed4 frag(v2f i) : COLOR
+			fixed4 frag(v2f i) : SV_Target
 			{
 				fixed4 c1 = tex2D(_MainTex, i.uv0);
 				fixed4 c2 = tex2D(_HighlightingBuffer, i.uv1);

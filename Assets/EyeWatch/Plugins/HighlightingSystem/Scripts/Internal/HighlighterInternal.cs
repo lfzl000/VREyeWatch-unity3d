@@ -1,41 +1,69 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.Rendering;
 using System.Collections;
 using System.Collections.Generic;
 
 namespace HighlightingSystem
 {
+	[DisallowMultipleComponent]
 	public partial class Highlighter : MonoBehaviour
 	{
+		private enum Mode
+		{
+			None, 
+			Highlighter, 
+			Occluder, 
+			HighlighterSeeThrough, 
+			OccluderSeeThrough, 
+		}
+
 		// Constants (don't touch this!)
 		#region Constants
-		// 2 * PI constant required for flashing
+		// 2 * PI constant for sine flashing
 		private const float doublePI = 2f * Mathf.PI;
 		
 		// Occlusion color
 		private readonly Color occluderColor = new Color(0f, 0f, 0f, 0f);
 
 		// ZTest LEqual
-		private const float zTestLessEqual = (float)CompareFunction.LessEqual;
+		private const int zTestLessEqual = (int)CompareFunction.LessEqual;
 		
 		// ZTest Always
-		private const float zTestAlways = (float)CompareFunction.Always;
+		private const int zTestAlways = (int)CompareFunction.Always;
+
+		// Highlighting modes rendered in that order
+		static private readonly Mode[] renderingOrder = new Mode[] { Mode.Highlighter, Mode.Occluder, Mode.HighlighterSeeThrough, Mode.OccluderSeeThrough };
 		#endregion
 
 		#region Static Fields
+		// List of all highlighters in scene
+		static private HashSet<Highlighter> highlighters = new HashSet<Highlighter>();
+
 		// Global highlighting shaders ZWrite property
-		static private float zWrite = -1f;				// Set to unusual default value to force initialization on start
+		// Set to unusual default value to force initialization on start
+		static private int zWrite = -1;
 
 		// Global highlighting shaders Offset Factor property
-		static private float offsetFactor = float.NaN;	// Set to unusual default value to force initialization on start
+		// Set to unusual default value to force initialization on start
+		static private float offsetFactor = float.NaN;
 
 		// Global highlighting shaders Offset Units property
-		static private float offsetUnits = float.NaN;	// Set to unusual default value to force initialization on start
+		// Set to unusual default value to force initialization on start
+		static private float offsetUnits = float.NaN;
 		#endregion
 
 		#region Public Fields
-		// Current state of highlighting (true if highlighted and visible)
-		public bool highlighted { get; private set; }
+		/// <summary>
+		/// Controls see-through mode for highlighters or occluders. When set to true - highlighter in this mode will not be occluded by anything (except for see-through occluders). Occluder in this mode will overlap any highlighting.
+		/// </summary>
+		[HideInInspector]
+		public bool seeThrough;
+
+		/// <summary>
+		/// Controls occluder mode. Note that non-see-through highlighting occluders will be enabled only when frame depth buffer is not available!
+		/// </summary>
+		[HideInInspector]
+		public bool occluder;
 		#endregion
 
 		#region Private Fields
@@ -43,78 +71,60 @@ namespace HighlightingSystem
 		private Transform tr;
 
 		// Cached Renderers
-		private List<RendererCache> highlightableRenderers;
+		private List<HighlighterRenderer> highlightableRenderers = new List<HighlighterRenderer>();
 
-		// Contains frame number, in which Highlighter visibility has been checked
-		private int visibilityCheckFrame = -1;
+		// Renderers reinitialization is required flag
+		private bool renderersDirty;
 
-		// Visibility changed in this frame
-		private bool visibilityChanged = false;
+		// Static list to prevent unnecessary memory allocations when grabbing renderer components
+		static private List<Component> sComponents = new List<Component>(4);
 
-		// At least 1 renderer is visible in this frame
-		private bool visible = false;
+		// Highlighting mode
+		private Mode mode;
+		
+		// Current ZTest value
+		private bool zTest;
+		
+		// Current Stencil Ref value
+		private bool stencilRef;
 
-		// Materials reinitialization is required flag
-		private bool renderersDirty = true;
-		
-		// Current highlighting color
-		private Color currentColor;
-		
-		// Transition is active flag
-		private bool transitionActive = false;
-		
-		// Current transition value
-		private float transitionValue = 0f;
-		
-		// Flashing frequency (times per second)
-		private float flashingFreq = 2f;
-		
 		// One-frame highlighting flag
-		private int _once = 0;
+		private int _once = -1;
 		private bool once
 		{
 			get { return _once == Time.frameCount; }
-			set { _once = value ? Time.frameCount : 0; }
+			set { _once = value ? Time.frameCount : -1; }
 		}
+
+		// Flashing enabled flag
+		private bool flashing;
+
+		// Current highlighting color
+		private Color currentColor;
 		
+		// Current transition value
+		private float transitionValue;
+
+		// Current Transition target
+		private float transitionTarget;
+
+		// Transition duration
+		private float transitionTime;
+
 		// One-frame highlighting color
-		private Color onceColor = Color.red;
+		private Color onceColor;
 		
-		// Flashing state flag
-		private bool flashing = false;
+		// Flashing frequency (times per second)
+		private float flashingFreq;
 		
 		// Flashing from color
-		private Color flashingColorMin = new Color(0f, 1f, 1f, 0f);
+		private Color flashingColorMin;
 		
 		// Flashing to color
-		private Color flashingColorMax = new Color(0f, 1f, 1f, 1f);
-		
-		// Constant highlighting state flag
-		private bool constantly = false;
-		
-		// Constant highlighting color
-		private Color constantColor = Color.yellow;
-		
-		// Occluder mode is enabled flag
-		private bool occluder = false;
-		
-		// See-through mode flag (should have same initial value with zTest and renderQueue variables!)
-		private bool seeThrough = true;
-		
-		// RenderQueue (true = Geometry+1, false = Geometry)
-		private bool renderQueue = true;
-		
-		// Current ZTest value (true = Always, false = LEqual)
-		private bool zTest = true;
-		
-		// Current Stencil Ref value (true = 1, false = 0)
-		private bool stencilRef = true;
+		private Color flashingColorMax;
 
-		// Returns real ZTest float value which will be passed to the materials
-		private float zTestFloat { get { return zTest ? zTestAlways : zTestLessEqual; } }
-		
-		// Returns real Stencil Ref float value which will be passed to the materials
-		private float stencilRefFloat { get { return stencilRef ? 1f : 0f; } }
+		// Constant highlighting color
+		private Color constantColor;
 
 		// Opaque shader cached reference
 		static private Shader _opaqueShader;
@@ -153,14 +163,13 @@ namespace HighlightingSystem
 				if (_opaqueMaterial == null)
 				{
 					_opaqueMaterial = new Material(opaqueShader);
-					_opaqueMaterial.hideFlags = HideFlags.HideAndDontSave;
 					
 					// Make sure that ShaderPropertyIDs is initialized
 					ShaderPropertyID.Initialize();
 					
 					// Make sure that shader will have proper default values
-					_opaqueMaterial.SetFloat(ShaderPropertyID._ZTest, zTestFloat);
-					_opaqueMaterial.SetFloat(ShaderPropertyID._StencilRef, stencilRefFloat);
+					_opaqueMaterial.SetInt(ShaderPropertyID._ZTest, GetZTest(zTest));
+					_opaqueMaterial.SetInt(ShaderPropertyID._StencilRef, GetStencilRef(stencilRef));
 				}
 				return _opaqueMaterial;
 			}
@@ -171,255 +180,155 @@ namespace HighlightingSystem
 		// 
 		private void Awake()
 		{
-			tr = GetComponent<Transform>();
 			ShaderPropertyID.Initialize();
+
+			tr = GetComponent<Transform>();
+
+			renderersDirty = true;
+			seeThrough = zTest = true;
+			mode = Mode.None;
+			stencilRef = true;
+
+			// Initial highlighting state
+			once = false;
+			flashing = false;
+			occluder = false;
+			transitionValue = transitionTarget = 0f;
+			onceColor = Color.red;
+			flashingFreq = 2f;
+			flashingColorMin = new Color(0f, 1f, 1f, 0f);
+			flashingColorMax = new Color(0f, 1f, 1f, 1f);
+			constantColor = Color.yellow;
 		}
 		
 		// 
 		private void OnEnable()
 		{
-			if (!CheckInstance()) { return; }
-
-			HighlighterManager.Add(this);
+			highlighters.Add(this);
 		}
-		
+
 		// 
 		private void OnDisable()
 		{
-			HighlighterManager.Remove(this);
-
-			// Clear cached renderers
-			if (highlightableRenderers != null) { highlightableRenderers.Clear(); }
+			highlighters.Remove(this);
 			
+			ClearRenderers();
+
 			// Reset highlighting parameters to default values
 			renderersDirty = true;
-			highlighted = false;
-			currentColor = Color.clear;
-			transitionActive = false;
-			transitionValue = 0f;
 			once = false;
 			flashing = false;
-			constantly = false;
-			occluder = false;
-			seeThrough = false;
+			transitionValue = transitionTarget = 0f;
 
 			/* 
 			// Reset custom parameters of the highlighting
+			occluder = false;
+			seeThrough = false;
 			onceColor = Color.red;
+			flashingFreq = 2f;
 			flashingColorMin = new Color(0f, 1f, 1f, 0f);
 			flashingColorMax = new Color(0f, 1f, 1f, 1f);
-			flashingFreq = 2f;
 			constantColor = Color.yellow;
+			transitionTime = 0f;
 			*/
 		}
 
 		// 
 		private void Update()
 		{
-			// Update transition value
-			PerformTransition();
-		}
-		#endregion
-
-		#region Public Methods
-		// Returns true in case CommandBuffer should be rebuilt
-		public bool UpdateHighlighting(bool isDepthAvailable)
-		{
-			bool wasHighlighted = highlighted;
-			bool changed = false;
-			
-			changed |= UpdateRenderers();
-			
-			// Is any highlighting mode is enabled?
-			highlighted = (once || flashing || constantly || transitionActive);
-			
-			bool rq = false;
-			
-			// In case framebuffer depth data is available or any highlighting mode is active
-			if (isDepthAvailable || highlighted)
-			{
-				// ZTest = (seeThrough ? Always : LEqual), Stencil Ref = 1
-				UpdateShaderParams(seeThrough, true);
-				// RenderQueue = (seeThrough ? Geometry+1 : Geometry)
-				rq = seeThrough;
-			}
-			// Otherwise, in case only occluder mode is enabled
-			else if (occluder)
-			{
-				// ZTest LEqual, Stencil Ref 0
-				UpdateShaderParams(seeThrough, false);
-				// RenderQueue = Geometry
-				rq = seeThrough;
-				
-				highlighted = true;
-			}
-
-			// In case renderer should be put to another render queue
-			if (renderQueue != rq)
-			{
-				renderQueue = rq;
-				changed = true;
-			}
-			
-			if (highlighted)
-			{
-				changed |= UpdateVisibility();
-				
-				if (visible)
-				{
-					UpdateColors();
-				}
-				else
-				{
-					highlighted = false;
-				}
-			}
-			
-			changed |= (wasHighlighted != highlighted);
-			
-			return changed;
-		}
-		
-		// Fills given CommandBuffer with this Highlighter rendering commands
-		public void FillBuffer(ref CommandBuffer buffer, bool renderQueue)
-		{
-			if (!highlighted) { return; }
-			
-			if (this.renderQueue != renderQueue) { return; }
-			
-			for (int i = highlightableRenderers.Count - 1; i >= 0; i--)
-			{
-				RendererCache renderer = highlightableRenderers[i];
-				if (!renderer.FillBuffer(ref buffer))
-				{
-					highlightableRenderers.RemoveAt(i);
-				}
-			}
+			UpdateTransition();
 		}
 		#endregion
 
 		#region Private Methods
-		// Allow only single instance of the Highlighter component on a GameObject
-		private bool CheckInstance()
+		// Clear cached renderers
+		private void ClearRenderers()
 		{
-			Highlighter[] highlighters = GetComponents<Highlighter>();
-			if (highlighters.Length > 1 && highlighters[0] != this)
+			for (int i = highlightableRenderers.Count - 1; i >= 0; i--)
 			{
-				enabled = false;
-				Debug.LogWarning("HighlightingSystem : Multiple Highlighter components on a single GameObject is not allowed! Highlighter has been disabled on a GameObject with name '" + gameObject.name + "'.");
-				return false;
+				HighlighterRenderer renderer = highlightableRenderers[i];
+				renderer.SetState(false);
 			}
-			return true;
+			highlightableRenderers.Clear();
 		}
 
 		// This method defines the way in which renderers are initialized
-		private bool UpdateRenderers()
+		private void UpdateRenderers()
 		{
 			if (renderersDirty)
 			{
+				ClearRenderers();
+
+				// Find all renderers which should be controlled with this Highlighter component
 				List<Renderer> renderers = new List<Renderer>();
-				
-				// Find all renderers which should be controlled by this Highlighter component
-				GrabRenderers(tr, ref renderers);
-				
+				GrabRenderers(tr, renderers);
+
 				// Cache found renderers
-				highlightableRenderers = new List<RendererCache>();
-				int l = renderers.Count;
-				for (int i = 0; i < l; i++)
+				for (int i = 0, imax = renderers.Count; i < imax; i++)
 				{
-					RendererCache cache = new RendererCache(renderers[i], opaqueMaterial, zTestFloat, stencilRefFloat);
-					highlightableRenderers.Add(cache);
+					GameObject rg = renderers[i].gameObject;
+					HighlighterRenderer renderer = rg.GetComponent<HighlighterRenderer>();
+					if (renderer == null) { renderer = rg.AddComponent<HighlighterRenderer>(); }
+					renderer.SetState(true);
+
+					renderer.Initialize(opaqueMaterial, transparentShader);
+					highlightableRenderers.Add(renderer);
 				}
 				
-				// Reset
-				highlighted = false;
 				renderersDirty = false;
-				currentColor = Color.clear;
-				
-				return true;
-			}
-			else
-			{
-				// To avoid null-reference exceptions when cached GameObject or Renderer has been removed but ReinitMaterials wasn't called
-				bool changed = false;
-				for (int i = highlightableRenderers.Count - 1; i >= 0; i--)
-				{
-					if (highlightableRenderers[i].IsDestroyed())
-					{
-						highlightableRenderers.RemoveAt(i);
-						changed = true;
-					}
-				}
-				return changed;
 			}
 		}
 
-		// Returns true in case visibility changed in this frame
-		private bool UpdateVisibility()
-		{
-			if (visibilityCheckFrame == Time.frameCount) { return visibilityChanged; }
-			visibilityCheckFrame = Time.frameCount;
-
-			visible = false;
-			visibilityChanged = false;
-			for (int i = 0, imax = highlightableRenderers.Count; i < imax; i++)
-			{
-				RendererCache rc = highlightableRenderers[i];
-				visibilityChanged |= rc.UpdateVisibility();
-				visible |= rc.visible;
-			}
-
-			return visibilityChanged;
-		}
-
-		// Follows hierarchy of objects from t, searches for Renderers and adds them to the list. Breaks if another Highlighter component found
-		private void GrabRenderers(Transform t, ref List<Renderer> renderers)
+		// Recursively follows hierarchy of objects from t, searches for Renderers and adds them to the list. 
+		// Breaks if HighlighterBlocker or another Highlighter component found
+		private void GrabRenderers(Transform t, List<Renderer> renderers)
 		{
 			GameObject g = t.gameObject;
-			IEnumerator e;
-			
+
 			// Find all Renderers of all types on current GameObject g and add them to the renderers list
 			for (int i = 0, imax = types.Count; i < imax; i++)
 			{
-				Component[] c = g.GetComponents(types[i]);
-				
-				e = c.GetEnumerator();
-				while (e.MoveNext())
+				g.GetComponents(types[i], sComponents);
+				for (int j = 0, jmax = sComponents.Count; j < jmax; j++)
 				{
-					renderers.Add(e.Current as Renderer);
+					renderers.Add(sComponents[j] as Renderer);
 				}
 			}
+			sComponents.Clear();
 			
 			// Return if transform t doesn't have any children
-			if (t.childCount == 0) { return; }
+			int childCount = t.childCount;
+			if (childCount == 0) { return; }
 			
 			// Recursively cache renderers on all child GameObjects
-			e = t.GetEnumerator();
-			while (e.MoveNext())
+			for (int i = 0; i < childCount; i++)
 			{
-				Transform childTransform = e.Current as Transform;
-				GameObject childGameObject = childTransform.gameObject;
-				Highlighter h = childGameObject.GetComponent<Highlighter>();
-				
+				Transform childTransform = t.GetChild(i);
+
 				// Do not cache Renderers of this childTransform in case it has it's own Highlighter component
+				Highlighter h = childTransform.GetComponent<Highlighter>();
 				if (h != null) { continue; }
+
+				// Do not cache Renderers of this childTransform in case HighlighterBlocker found
+				HighlighterBlocker hb = childTransform.GetComponent<HighlighterBlocker>();
+				if (hb != null) { continue; }
 				
-				GrabRenderers(childTransform, ref renderers);
+				GrabRenderers(childTransform, renderers);
 			}
 		}
 
-		// Sets RenderQueue, ZTest and Stencil Ref parameters on all materials of all renderers of this object
+		// Sets ZTest and Stencil Ref parameters on all materials of all renderers of this object
 		private void UpdateShaderParams(bool zt, bool sr)
 		{
 			// ZTest
 			if (zTest != zt)
 			{
 				zTest = zt;
-				float ztf = zTestFloat;
-				opaqueMaterial.SetFloat(ShaderPropertyID._ZTest, ztf);
+				int ztInt = GetZTest(zTest);
+				opaqueMaterial.SetInt(ShaderPropertyID._ZTest, ztInt);
 				for (int i = 0; i < highlightableRenderers.Count; i++) 
 				{
-					highlightableRenderers[i].SetZTestForTransparent(ztf);
+					highlightableRenderers[i].SetZTestForTransparent(ztInt);
 				}
 			}
 			
@@ -427,99 +336,156 @@ namespace HighlightingSystem
 			if (stencilRef != sr)
 			{
 				stencilRef = sr;
-				float srf = stencilRefFloat;
-				opaqueMaterial.SetFloat(ShaderPropertyID._StencilRef, srf);
+				int srInt = GetStencilRef(stencilRef);
+				opaqueMaterial.SetInt(ShaderPropertyID._StencilRef, srInt);
 				for (int i = 0; i < highlightableRenderers.Count; i++)
 				{
-					highlightableRenderers[i].SetStencilRefForTransparent(srf);
+					highlightableRenderers[i].SetStencilRefForTransparent(srInt);
 				}
 			}
 		}
 
-		// Update highlighting color if necessary
+		// Updates highlighting color
 		private void UpdateColors()
 		{
 			if (once)
 			{
-				SetColor(onceColor);
-				return;
+				currentColor = onceColor;
 			}
-			
-			if (flashing)
+			else if (flashing)
 			{
 				// Flashing frequency is not affected by Time.timeScale
-				Color c = Color.Lerp(flashingColorMin, flashingColorMax, 0.5f * Mathf.Sin(Time.realtimeSinceStartup * flashingFreq * doublePI) + 0.5f);
-				SetColor(c);
-				return;
+				currentColor = Color.Lerp(flashingColorMin, flashingColorMax, 0.5f * Mathf.Sin(Time.realtimeSinceStartup * flashingFreq * doublePI) + 0.5f);
 			}
-			
-			if (transitionActive)
+			else if (transitionValue > 0f)
 			{
-				Color c = new Color(constantColor.r, constantColor.g, constantColor.b, constantColor.a * transitionValue);
-				SetColor(c);
-				return;
+				currentColor = constantColor;
+				currentColor.a *= transitionValue;
 			}
-			else if (constantly)
+			else if (occluder)
 			{
-				SetColor(constantColor);
-				return;
+				currentColor = occluderColor;
 			}
-			
-			if (occluder)
+			else
 			{
-				SetColor(occluderColor);
 				return;
 			}
-		}
 
-		// Set given highlighting color
-		private void SetColor(Color value)
-		{
-			if (currentColor == value) { return; }
-			currentColor = value;
-			opaqueMaterial.SetColor(ShaderPropertyID._Outline, currentColor);
+			// Apply color
+			opaqueMaterial.SetColor(ShaderPropertyID._Color, currentColor);
 			for (int i = 0; i < highlightableRenderers.Count; i++)
 			{
 				highlightableRenderers[i].SetColorForTransparent(currentColor);
 			}
 		}
-		
-		// Calculate new transition value if necessary
-		private void PerformTransition()
+
+		// Update transition value
+		private void UpdateTransition()
 		{
-			if (transitionActive == false) { return; }
-			
-			float targetValue = constantly ? 1f : 0f;
-			
-			// Is transition finished?
-			if (transitionValue == targetValue)
+			if (transitionValue != transitionTarget)
 			{
-				transitionActive = false;
-				return;
+				if (transitionTime <= 0f)
+				{
+					transitionValue = transitionTarget;
+				}
+				else
+				{
+					float dir = (transitionTarget > 0f ? 1f : -1f);
+					transitionValue = Mathf.Clamp01(transitionValue + (dir * Time.unscaledDeltaTime) / transitionTime);
+				}
 			}
-			
-			if (Time.timeScale != 0f)
+		}
+
+		// 
+		private void FillBufferInternal(CommandBuffer buffer, Mode m, bool depthAvailable)
+		{
+			UpdateRenderers();
+
+			bool isHighlighter = once || flashing || (transitionValue > 0f);
+			bool isOccluder = occluder && (seeThrough || !depthAvailable);
+
+			// Update mode
+			mode = Mode.None;
+			if (isHighlighter)
 			{
-				// Calculating delta time untouched by Time.timeScale
-				float unscaledDeltaTime = Time.deltaTime / Time.timeScale;
-				
-				// Calculating new transition value
-				transitionValue = Mathf.Clamp01(transitionValue + (constantly ? constantOnSpeed : -constantOffSpeed) * unscaledDeltaTime);
+				mode = seeThrough ? Mode.HighlighterSeeThrough : Mode.Highlighter;
 			}
-			else { return; }
+			else if (isOccluder)
+			{
+				mode = seeThrough ? Mode.OccluderSeeThrough : Mode.Occluder;
+			}
+
+			if (mode == Mode.None || mode != m) { return; }
+
+			if (isHighlighter)
+			{
+				// ZTest = (seeThrough ? Always : LEqual), StencilRef = 1
+				UpdateShaderParams(seeThrough, true);
+			}
+			else if (isOccluder)
+			{
+				// ZTest = LEqual, StencilRef = seeThrough ? 1 : 0
+				UpdateShaderParams(false, seeThrough);
+			}
+			UpdateColors();
+
+			// Fill CommandBuffer with this highlighter rendering commands
+			for (int i = highlightableRenderers.Count - 1; i >= 0; i--)
+			{
+				// To avoid null-reference exceptions when cached renderer has been removed but ReinitMaterials wasn't been called
+				HighlighterRenderer renderer = highlightableRenderers[i];
+				if (renderer == null)
+				{
+					highlightableRenderers.RemoveAt(i);
+				}
+				// Try to fill buffer
+				else if (!renderer.FillBuffer(buffer))
+				{
+					highlightableRenderers.RemoveAt(i);
+					renderer.SetState(false);
+				}
+			}
 		}
 		#endregion
 
 		#region Static Methods
-		// Globally sets ZWrite shader parameter for all highlighting materials
-		static public void SetZWrite(float value)
+		// Fill CommandBuffer with highlighters rendering commands
+		static public void FillBuffer(CommandBuffer buffer, bool depthAvailable)
+		{
+			for (int i = 0; i < renderingOrder.Length; i++)
+			{
+				Mode mode = renderingOrder[i];
+
+				var e = highlighters.GetEnumerator();
+				while (e.MoveNext())
+				{
+					Highlighter highlighter = e.Current;
+					highlighter.FillBufferInternal(buffer, mode, depthAvailable);
+				}
+			}
+		}
+
+		// Returns integer value for ZTest, which can be passed directly to the shaders (true = Always, false = LEqual)
+		static private int GetZTest(bool enabled)
+		{
+			return enabled ? zTestAlways : zTestLessEqual;
+		}
+
+		// Returns integer value for StencilRef, which can be passed directly to the shaders (true = 1, false = 0)
+		static private int GetStencilRef(bool enabled)
+		{
+			return enabled ? 1 : 0;
+		}
+
+		// Set highlighting shaders global ZWrite property
+		static public void SetZWrite(int value)
 		{
 			if (zWrite == value) { return; }
 			zWrite = value;
-			Shader.SetGlobalFloat(ShaderPropertyID._HighlightingZWrite, zWrite);
+			Shader.SetGlobalInt(ShaderPropertyID._HighlightingZWrite, zWrite);
 		}
-
-		// Globally sets Offset Factor shader parameter for all highlighting materials
+		
+		// Set highlighting shaders global OffsetFactor property
 		static public void SetOffsetFactor(float value)
 		{
 			if (offsetFactor == value) { return; }
@@ -527,7 +493,7 @@ namespace HighlightingSystem
 			Shader.SetGlobalFloat(ShaderPropertyID._HighlightingOffsetFactor, offsetFactor);
 		}
 
-		// Globally sets Offset Units shader parameter for all highlighting materials
+		// Set highlighting shaders global OffsetUnits property
 		static public void SetOffsetUnits(float value)
 		{
 			if (offsetUnits == value) { return; }

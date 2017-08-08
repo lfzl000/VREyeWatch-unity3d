@@ -1,4 +1,4 @@
-﻿Shader "Hidden/Highlighted/Cut"
+Shader "Hidden/Highlighted/Cut"
 {
 	SubShader
 	{
@@ -28,7 +28,7 @@
 			
 			struct v2f
 			{
-				float4 pos : POSITION;
+				float4 pos : SV_POSITION;
 				half2 uv : TEXCOORD0;
 			};
 			
@@ -41,14 +41,15 @@
 				o.pos = v.vertex;
 				
 				#if defined(UNITY_HALF_TEXEL_OFFSET)
-				o.pos.xy += _HighlightingBufferTexelSize;
+				o.pos.x -= _HighlightingBufferTexelSize.x;
+				o.pos.y += _HighlightingBufferTexelSize.y;
 				#endif
 				
 				o.uv = v.texcoord.xy;
 				return o;
 			}
 			
-			fixed4 frag(v2f i) : COLOR
+			fixed4 frag(v2f i) : SV_Target
 			{
 				return tex2D(_HighlightingBlurred, i.uv);
 			}
@@ -79,18 +80,19 @@
 			
 			uniform float2 _HighlightingBufferTexelSize;
 			
-			float4 vert(appdata_vert v) : POSITION
+			float4 vert(appdata_vert v) : SV_POSITION
 			{
 				float4 pos = v.vertex;
 				
 				#if defined(UNITY_HALF_TEXEL_OFFSET)
-				pos.xy += _HighlightingBufferTexelSize;
+				pos.x -= _HighlightingBufferTexelSize.x;
+				pos.y += _HighlightingBufferTexelSize.y;
 				#endif
 				
 				return pos;
 			}
 			
-			fixed4 frag() : COLOR
+			fixed4 frag() : SV_Target
 			{
 				return 0;
 			}

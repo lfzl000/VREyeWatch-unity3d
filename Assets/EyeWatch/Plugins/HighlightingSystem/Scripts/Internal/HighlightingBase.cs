@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Serialization;
 using System.Collections;
@@ -6,6 +6,7 @@ using System.Collections.Generic;
 
 namespace HighlightingSystem
 {
+	[DisallowMultipleComponent]
 	[RequireComponent(typeof(Camera))]
 	public class HighlightingBase : MonoBehaviour
 	{
@@ -14,22 +15,44 @@ namespace HighlightingSystem
 		static protected readonly string renderBufferName = "HighlightingSystem";
 		static protected readonly Matrix4x4 identityMatrix = Matrix4x4.identity;
 		protected const CameraEvent queue = CameraEvent.BeforeImageEffectsOpaque;
-
-		static protected RenderTargetIdentifier highlightingBufferID;
+		
 		static protected RenderTargetIdentifier cameraTargetID;
 		
 		static protected Mesh quad;
 
-		// Graphics device version identifiers
-		protected const int OGL = 0;
-		protected const int D3D9 = 1;
-		protected const int D3D11 = 2;
+		// Current graphics device version
+		static protected GraphicsDeviceType device = GraphicsDeviceType.Null;
 
-		// Current graphics device version: 0 = OpenGL or unknown (default), 1 = Direct3D 9, 2 = Direct3D 11
-		static protected int graphicsDeviceVersion = D3D9;
+		// Same check as in HLSLSupport.cginc
+		static protected bool uvStartsAtTop
+		{
+			get
+			{
+				return
+					device == GraphicsDeviceType.Direct3D9			// SHADER_API_D3D9
+					|| device == GraphicsDeviceType.Xbox360			// SHADER_API_XBOX360
+					|| device == GraphicsDeviceType.PlayStation3		// SHADER_API_PS3
+					|| device == GraphicsDeviceType.Direct3D11		// SHADER_API_D3D11
+					|| device == GraphicsDeviceType.PlayStationVita	// SHADER_API_PSP2
+					|| device == GraphicsDeviceType.PlayStation4		// SHADER_API_PSSL
+					|| device == GraphicsDeviceType.Metal			// SHADER_API_METAL
+					// device == GraphicsDeviceType.?				// SHADER_API_D3D11_9X - Direct3D 11 “feature level 9.x” target for Windows Store & Windows Phone.
+					// device == GraphicsDeviceType.?				// SHADER_API_WIIU - Nintendo WiiU
+					;
+			}
+		}
 		#endregion
 		
 		#region Public Fields
+		// True if supported on this platform
+		public bool isSupported
+		{
+			get
+			{
+				return CheckSupported(false);
+			}
+		}
+
 		// Depth offset factor for highlighting shaders
 		public float offsetFactor = 0f;
 
@@ -48,7 +71,6 @@ namespace HighlightingSystem
 					if ((value != 0) && ((value & (value - 1)) == 0))
 					{
 						_downsampleFactor = value;
-						isDirty = true;
 					}
 					else
 					{
@@ -67,7 +89,6 @@ namespace HighlightingSystem
 				if (_iterations != value)
 				{
 					_iterations = value;
-					isDirty = true;
 				}
 			}
 		}
@@ -81,7 +102,6 @@ namespace HighlightingSystem
 				if (_blurMinSpread != value)
 				{
 					_blurMinSpread = value;
-					isDirty = true;
 				}
 			}
 		}
@@ -95,7 +115,6 @@ namespace HighlightingSystem
 				if (_blurSpread != value)
 				{
 					_blurSpread = value;
-					isDirty = true;
 				}
 			}
 		}
@@ -116,12 +135,28 @@ namespace HighlightingSystem
 				}
 			}
 		}
+
+		// Blitter component reference (optional)
+		public HighlightingBlitter blitter
+		{
+			get { return _blitter; }
+			set
+			{
+				if (_blitter != null)
+				{
+					_blitter.Unregister(this);
+				}
+				_blitter = value;
+				if (_blitter != null)
+				{
+					_blitter.Register(this);
+				}
+			}
+		}
 		#endregion
 		
 		#region Protected Fields
 		protected CommandBuffer renderBuffer;
-
-		protected bool isDirty = true;
 
 		protected int cachedWidth = -1;
 		protected int cachedHeight = -1;
@@ -146,14 +181,17 @@ namespace HighlightingSystem
 		[SerializeField]
 		protected float _blurIntensity = 0.3f;
 
+		[SerializeField]
+		protected HighlightingBlitter _blitter;
+
+		// RenderTargetidentifier for the highlightingBuffer RenderTexture
+		protected RenderTargetIdentifier highlightingBufferID;
+
 		// RenderTexture with highlighting buffer
 		protected RenderTexture highlightingBuffer = null;
 
 		// Camera reference
 		protected Camera cam = null;
-
-		// True if HighlightingSystem is supported on this platform
-		protected bool isSupported = false;
 
 		// True if framebuffer depth data is currently available (it is required for the highlighting occlusion feature)
 		protected bool isDepthAvailable = true;
@@ -171,33 +209,32 @@ namespace HighlightingSystem
 		static protected Shader[] shaders;
 		static protected Material[] materials;
 
-		// Static materials
-		static protected Material cutMaterial;
-		static protected Material compMaterial;
-
 		// Dynamic materials
 		protected Material blurMaterial;
+		protected Material cutMaterial;
+		protected Material compMaterial;
 
 		static protected bool initialized = false;
+
+		static protected HashSet<Camera> cameras = new HashSet<Camera>();
 		#endregion
 
 		#region MonoBehaviour
 		// 
 		protected virtual void OnEnable()
 		{
-			if (!CheckInstance()) { return; }
-
 			Initialize();
 
-			isSupported = CheckSupported();
-			if (!isSupported)
+			if (!CheckSupported(true))
 			{
 				enabled = false;
-				Debug.LogWarning("HighlightingSystem : Highlighting System has been disabled due to unsupported Unity features on the current platform!");
+				Debug.LogError("HighlightingSystem : Highlighting System has been disabled due to unsupported Unity features on the current platform!");
 				return;
 			}
 
 			blurMaterial = new Material(materials[BLUR]);
+			cutMaterial = new Material(materials[CUT]);
+			compMaterial = new Material(materials[COMP]);
 			
 			// Set initial intensity in blur material
 			blurMaterial.SetFloat(ShaderPropertyID._Intensity, _blurIntensity);
@@ -206,17 +243,22 @@ namespace HighlightingSystem
 			renderBuffer.name = renderBufferName;
 
 			cam = GetComponent<Camera>();
-			UpdateHighlightingBuffer();
 
-			// Force-rebuild renderBuffer
-			isDirty = true;
+			cameras.Add(cam);
 
 			cam.AddCommandBuffer(queue, renderBuffer);
+
+			if (_blitter != null)
+			{
+				_blitter.Register(this);
+			}
 		}
 		
 		// 
 		protected virtual void OnDisable()
 		{
+			cameras.Remove(cam);
+
 			if (renderBuffer != null)
 			{
 				cam.RemoveCommandBuffer(queue, renderBuffer);
@@ -228,79 +270,120 @@ namespace HighlightingSystem
 				highlightingBuffer.Release();
 				highlightingBuffer = null;
 			}
-		}
 
-		// 
-		protected virtual void LateUpdate()
-		{
-			UpdateHighlightingBuffer();
+			if (_blitter != null)
+			{
+				_blitter.Unregister(this);
+			}
 		}
 
 		// 
 		protected virtual void OnPreRender()
 		{
+			bool updateHighlightingBuffer = false;
 			int aa = GetAA();
 			
 			bool depthAvailable = (aa == 1);
-			
-			// In case MSAA is enabled in forward/vertex lit rendeirng paths - depth buffer is not available
-			if (aa > 1 && (cam.actualRenderingPath == RenderingPath.Forward || cam.actualRenderingPath == RenderingPath.VertexLit))
+
+			if (cam.actualRenderingPath == RenderingPath.Forward || cam.actualRenderingPath == RenderingPath.VertexLit)
 			{
-				depthAvailable = false;
+				// In case MSAA is enabled in forward/vertex lit rendeirng paths - depth buffer is not available
+				if (aa > 1)
+				{
+					depthAvailable = false;
+				}
+
+				// In case camera clearFlags is set to 'Depth only' or 'Don't clear' in forward/vertex lit rendeirng paths - depth buffer is not available
+				if (cam.clearFlags == CameraClearFlags.Depth || cam.clearFlags == CameraClearFlags.Nothing)
+				{
+					depthAvailable = false;
+				}
 			}
-			
+
 			// Check if framebuffer depth data availability has changed
 			if (isDepthAvailable != depthAvailable)
 			{
+				updateHighlightingBuffer = true;
 				isDepthAvailable = depthAvailable;
 				// Update ZWrite value for all highlighting shaders correspondingly (isDepthAvailable ? ZWrite Off : ZWrite On)
-				Highlighter.SetZWrite(isDepthAvailable ? 0f : 1f);
+				Highlighter.SetZWrite(isDepthAvailable ? 0 : 1);
 				if (isDepthAvailable)
 				{
-					Debug.LogWarning("HighlightingSystem : Framebuffer depth data is available back again and will be used to occlude highlighting. Highlighting occluders disabled.");
+					Debug.LogWarning("HighlightingSystem : Framebuffer depth data is available back again. Depth occlusion enabled, highlighting occluders disabled. (This message is harmless)");
 				}
 				else
 				{
-					Debug.LogWarning("HighlightingSystem : Framebuffer depth data is not available and can't be used to occlude highlighting. Highlighting occluders enabled.");
+					Debug.LogWarning("HighlightingSystem : Framebuffer depth data is not available. Depth occlusion disabled, highlighting occluders enabled. (This message is harmless)");
 				}
-				isDirty = true;
 			}
-			
+
+			updateHighlightingBuffer |= (highlightingBuffer == null || cam.pixelWidth != cachedWidth || cam.pixelHeight != cachedHeight || aa != cachedAA);
+
+			if (updateHighlightingBuffer)
+			{
+				if (highlightingBuffer != null && highlightingBuffer.IsCreated())
+				{
+					highlightingBuffer.Release();
+				}
+
+				cachedWidth = cam.pixelWidth;
+				cachedHeight = cam.pixelHeight;
+				cachedAA = aa;
+				
+				highlightingBuffer = new RenderTexture(cachedWidth, cachedHeight, isDepthAvailable ? 0 : 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default);
+				highlightingBuffer.antiAliasing = cachedAA;
+				highlightingBuffer.filterMode = FilterMode.Point;
+				highlightingBuffer.useMipMap = false;
+				highlightingBuffer.wrapMode = TextureWrapMode.Clamp;
+				if (!highlightingBuffer.Create())
+				{
+					Debug.LogError("HighlightingSystem : UpdateHighlightingBuffer() : Failed to create highlightingBuffer RenderTexture!");
+				}
+				
+				highlightingBufferID = new RenderTargetIdentifier(highlightingBuffer);
+				cutMaterial.SetTexture(ShaderPropertyID._HighlightingBuffer, highlightingBuffer);
+				compMaterial.SetTexture(ShaderPropertyID._HighlightingBuffer, highlightingBuffer);
+				
+				Vector4 v = new Vector4(1f / (float)highlightingBuffer.width, 1f / (float)highlightingBuffer.height, 0f, 0f);
+				cutMaterial.SetVector(ShaderPropertyID._HighlightingBufferTexelSize, v);
+			}
+
 			// Set global depth offset properties for highlighting shaders to the values which has this HighlightingBase component
 			Highlighter.SetOffsetFactor(offsetFactor);
 			Highlighter.SetOffsetUnits(offsetUnits);
 
-			isDirty |= HighlighterManager.isDirty;
-			isDirty |= HighlightersChanged();
-
-			if (isDirty)
-			{
-				RebuildCommandBuffer();
-				isDirty = false;
-			}
+			RebuildCommandBuffer();
 		}
 
-		// 
+		// Do not remove! 
+		// Having this method in this script is necessary to support multiple cameras with different clear flags even in case custom blitter is being used
 		protected virtual void OnRenderImage(RenderTexture src, RenderTexture dst)
 		{
-			Graphics.Blit(src, dst, compMaterial);
+			if (blitter == null)
+			{
+				Blit(src, dst);
+			}
+			else
+			{
+				Graphics.Blit(src, dst);
+			}
 		}
 		#endregion
 
 		#region Internal
 		// 
+		static public bool IsHighlightingCamera(Camera cam)
+		{
+			return cameras.Contains(cam);
+		}
+
+		// 
 		static protected void Initialize()
 		{
 			if (initialized) { return; }
 
-			// Determine graphics device version
-			string version = SystemInfo.graphicsDeviceVersion.ToLower();
-			if (version.StartsWith("direct3d") || version.StartsWith("directx 11"))
-			{
-				if (version.StartsWith("direct3d 11") || version.StartsWith("directx 11")) { graphicsDeviceVersion = D3D11; }
-				else { graphicsDeviceVersion = D3D9; }
-			}
-			else { graphicsDeviceVersion = OGL; }
+			// Determine graphics device type
+			device = SystemInfo.graphicsDeviceType;
 
 			// Initialize shader property constants
 			ShaderPropertyID.Initialize();
@@ -315,14 +398,10 @@ namespace HighlightingSystem
 				shaders[i] = shader;
 				
 				Material material = new Material(shader);
-				material.hideFlags = HideFlags.HideAndDontSave;
 				materials[i] = material;
 			}
-			cutMaterial = materials[CUT];
-			compMaterial = materials[COMP];
 
-			// Initialize static RenderTargetIdentifiers
-			highlightingBufferID = new RenderTargetIdentifier(ShaderPropertyID._HighlightingBuffer);
+			// Initialize static RenderTargetIdentifier(s)
 			cameraTargetID = new RenderTargetIdentifier(BuiltinRenderTextureType.CameraTarget);
 
 			// Create static quad mesh
@@ -343,13 +422,13 @@ namespace HighlightingSystem
 				quad.Clear();
 			}
 			
-			float y1 = 1f;
-			float y2 = -1f;
+			float y1 = -1f;
+			float y2 = 1f;
 			
-			if (graphicsDeviceVersion == OGL)
+			if (uvStartsAtTop)
 			{
-				y1 = -1f;
-				y2 = 1f;
+				y1 = 1f;
+				y2 = -1f;
 			}
 			
 			quad.vertices = new Vector3[]
@@ -392,115 +471,64 @@ namespace HighlightingSystem
 		}
 
 		// 
-		protected virtual void UpdateHighlightingBuffer()
+		protected virtual bool CheckSupported(bool verbose)
 		{
-			int aa = GetAA();
-			
-			if (cam.pixelWidth == cachedWidth && cam.pixelHeight == cachedHeight && aa == cachedAA) { return; }
+			bool supported = true;
 
-			cachedWidth = cam.pixelWidth;
-			cachedHeight = cam.pixelHeight;
-			cachedAA = aa;
-
-			if (highlightingBuffer != null && highlightingBuffer.IsCreated())
-			{
-				highlightingBuffer.Release();
-			}
-
-			highlightingBuffer = new RenderTexture(cachedWidth, cachedHeight, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
-			highlightingBuffer.antiAliasing = cachedAA;
-			highlightingBuffer.filterMode = FilterMode.Bilinear;
-			highlightingBuffer.useMipMap = false;
-			highlightingBuffer.wrapMode = TextureWrapMode.Clamp;
-			if (!highlightingBuffer.Create())
-			{
-				Debug.LogError("HighlightingSystem : UpdateHighlightingBuffer() : Failed to create highlightingBuffer RenderTexture!");
-			}
-
-			// Always set as dirty, because camera width/height/aa has changed
-			isDirty = true;
-		}
-
-		// Allow only single instance of the HighlightingBase component on a GameObject
-		public virtual bool CheckInstance()
-		{
-			HighlightingBase[] highlightingBases = GetComponents<HighlightingBase>();
-			if (highlightingBases.Length > 1 && highlightingBases[0] != this)
-			{
-				enabled = false;
-				string className = this.GetType().ToString();
-				Debug.LogWarning(string.Format("HighlightingSystem : Only single instance of the HighlightingRenderer component is allowed on a single Gameobject! {0} has been disabled on GameObject with name '{1}'.", className, name));
-				return false;
-			}
-			return true;
-		}
-		
-		// 
-		protected virtual bool CheckSupported()
-		{
 			// Image Effects supported?
 			if (!SystemInfo.supportsImageEffects)
 			{
-				Debug.LogWarning("HighlightingSystem : Image effects is not supported on this platform!");
-				return false;
+				if (verbose) { Debug.LogError("HighlightingSystem : Image effects is not supported on this platform!"); }
+				supported = false;
 			}
 			
 			// Render Textures supported?
 			if (!SystemInfo.supportsRenderTextures)
 			{
-				Debug.LogWarning("HighlightingSystem : RenderTextures is not supported on this platform!");
-				return false;
+				if (verbose) { Debug.LogError("HighlightingSystem : RenderTextures is not supported on this platform!"); }
+				supported = false;
 			}
 			
 			// Required Render Texture Format supported?
 			if (!SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.ARGB32))
 			{
-				Debug.LogWarning("HighlightingSystem : RenderTextureFormat.ARGB32 is not supported on this platform!");
-				return false;
+				if (verbose) { Debug.LogError("HighlightingSystem : RenderTextureFormat.ARGB32 is not supported on this platform!"); }
+				supported = false;
+			}
+
+			// Stencil buffer supported?
+			if (SystemInfo.supportsStencil < 1)
+			{
+				if (verbose) { Debug.LogError("HighlightingSystem : Stencil buffer is not supported on this platform!"); }
+				supported = false;
 			}
 			
 			// HighlightingOpaque shader supported?
 			if (!Highlighter.opaqueShader.isSupported)
 			{
-				Debug.LogWarning("HighlightingSystem : HighlightingOpaque shader is not supported on this platform!");
-				return false;
+				if (verbose) { Debug.LogError("HighlightingSystem : HighlightingOpaque shader is not supported on this platform!"); }
+				supported = false;
 			}
 			
 			// HighlightingTransparent shader supported?
 			if (!Highlighter.transparentShader.isSupported)
 			{
-				Debug.LogWarning("HighlightingSystem : HighlightingTransparent shader is not supported on this platform!");
-				return false;
+				if (verbose) { Debug.LogError("HighlightingSystem : HighlightingTransparent shader is not supported on this platform!"); }
+				supported = false;
 			}
 
-			// Required shaders supported?
+			// Highlighting shaders supported?
 			for (int i = 0; i < shaders.Length; i++)
 			{
 				Shader shader = shaders[i];
 				if (!shader.isSupported)
 				{
-					Debug.LogWarning("HighlightingSystem : Shader '" + shader.name + "' is not supported on this platform!");
-					return false;
+					if (verbose) { Debug.LogError("HighlightingSystem : Shader '" + shader.name + "' is not supported on this platform!"); }
+					supported = false;
 				}
 			}
 
-			return true;
-		}
-
-		// 
-		protected virtual bool HighlightersChanged()
-		{
-			bool changed = false;
-
-			// Check if list of highlighted objects has changed
-			HashSet<Highlighter>.Enumerator e = HighlighterManager.GetEnumerator();
-			while (e.MoveNext())
-			{
-				Highlighter highlighter = e.Current;
-				changed |= highlighter.UpdateHighlighting(isDepthAvailable);
-			}
-
-			return changed;
+			return supported;
 		}
 
 		// 
@@ -508,44 +536,24 @@ namespace HighlightingSystem
 		{
 			renderBuffer.Clear();
 
-			int aa = GetAA();
-
 			RenderTargetIdentifier depthID = isDepthAvailable ? cameraTargetID : highlightingBufferID;
 
 			// Prepare and clear render target
-			renderBuffer.GetTemporaryRT(ShaderPropertyID._HighlightingBuffer, -1, -1, isDepthAvailable ? 0 : 24, FilterMode.Bilinear, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB, aa);
 			renderBuffer.SetRenderTarget(highlightingBufferID, depthID);
 			renderBuffer.ClearRenderTarget(!isDepthAvailable, true, colorClear);
 
 			// Fill buffer with highlighters rendering commands
-			HashSet<Highlighter>.Enumerator e;
-			e = HighlighterManager.GetEnumerator();
-			while (e.MoveNext())
-			{
-				Highlighter highlighter = e.Current;
-				highlighter.FillBuffer(ref renderBuffer, false);
-			}
-			e = HighlighterManager.GetEnumerator();
-			while (e.MoveNext())
-			{
-				Highlighter highlighter = e.Current;
-				highlighter.FillBuffer(ref renderBuffer, true);
-			}
+			Highlighter.FillBuffer(renderBuffer, isDepthAvailable);
 
 			// Create two buffers for blurring the image
 			RenderTargetIdentifier blur1ID = new RenderTargetIdentifier(ShaderPropertyID._HighlightingBlur1);
 			RenderTargetIdentifier blur2ID = new RenderTargetIdentifier(ShaderPropertyID._HighlightingBlur2);
 
-			int width = cam.pixelWidth / _downsampleFactor;
-			int height = cam.pixelHeight / _downsampleFactor;
+			int width = highlightingBuffer.width / _downsampleFactor;
+			int height = highlightingBuffer.height / _downsampleFactor;
 
-			renderBuffer.GetTemporaryRT(ShaderPropertyID._HighlightingBlur1, width, height, 0, FilterMode.Bilinear, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
-			renderBuffer.GetTemporaryRT(ShaderPropertyID._HighlightingBlur2, width, height, 0, FilterMode.Bilinear, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
-
-			Vector4 v;
-			v = new Vector4(1f / (float)cam.pixelWidth, 1f / (float)cam.pixelHeight, 0f, 0f);
-			renderBuffer.SetGlobalVector(ShaderPropertyID._HighlightingBufferTexelSize, v);
-			renderBuffer.SetGlobalVector(ShaderPropertyID._HighlightingBlurredTexelSize, v * _downsampleFactor);
+			renderBuffer.GetTemporaryRT(ShaderPropertyID._HighlightingBlur1, width, height, 0, FilterMode.Bilinear, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default);
+			renderBuffer.GetTemporaryRT(ShaderPropertyID._HighlightingBlur2, width, height, 0, FilterMode.Bilinear, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Default);
 
 			renderBuffer.Blit(highlightingBufferID, blur1ID);
 
@@ -553,7 +561,7 @@ namespace HighlightingSystem
 			bool oddEven = true;
 			for (int i = 0; i < _iterations; i++)
 			{
-				float off = _blurMinSpread + i * _blurSpread;
+				float off = _blurMinSpread + _blurSpread * i;
 				renderBuffer.SetGlobalFloat(ShaderPropertyID._HighlightingBlurOffset, off);
 				
 				if (oddEven)
@@ -568,9 +576,6 @@ namespace HighlightingSystem
 				oddEven = !oddEven;
 			}
 
-			v = new Vector4(-1f / (float)cam.pixelWidth, 1f / (float)cam.pixelHeight, 0f, 0f);
-			renderBuffer.SetGlobalVector(ShaderPropertyID._HighlightingBufferTexelSize, v);
-
 			// Upscale blurred texture and cut stencil from it
 			renderBuffer.SetGlobalTexture(ShaderPropertyID._HighlightingBlurred, oddEven ? blur1ID : blur2ID);
 			renderBuffer.SetRenderTarget(highlightingBufferID, depthID);
@@ -579,6 +584,12 @@ namespace HighlightingSystem
 			// Cleanup
 			renderBuffer.ReleaseTemporaryRT(ShaderPropertyID._HighlightingBlur1);
 			renderBuffer.ReleaseTemporaryRT(ShaderPropertyID._HighlightingBlur2);
+		}
+
+		// Blit highlighting result to the destination RenderTexture
+		public virtual void Blit(RenderTexture src, RenderTexture dst)
+		{
+			Graphics.Blit(src, dst, compMaterial);
 		}
 		#endregion
 	}

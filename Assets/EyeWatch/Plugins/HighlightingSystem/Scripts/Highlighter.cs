@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -7,18 +7,6 @@ namespace HighlightingSystem
 	public partial class Highlighter : MonoBehaviour
 	{
 		#region Editable Parameters
-		// Constant highlighting turning on speed (common property for all Highlighters)
-		static private float constantOnSpeed = 4.5f;
-		
-		// Constant highlighting turning off speed (common property for all Highlighters)
-		static private float constantOffSpeed = 4f;
-
-		// Default transparency cutoff value (used for shaders without _Cutoff property)
-		static private float transparentCutoff = 0.5f;
-
-		// Builtin layer reserved for the highlighting. This layer shouldn't be used for anything else in the project!
-		public const int highlightingLayer = 7;
-
 		// Only these types of Renderers will be highlighted
 		static public readonly List<System.Type> types = new List<System.Type>()
 		{
@@ -57,12 +45,11 @@ namespace HighlightingSystem
 		/// </summary>
 		public void On()
 		{
-			// Highlight object only in this frame
 			once = true;
 		}
 		
 		/// <summary>
-		/// Turn on one-frame highlighting with given color.
+		/// Turn on one-frame highlighting with specified color.
 		/// Can be called multiple times per update, color only from the latest call will be used.
 		/// </summary>
 		/// <param name='color'>
@@ -70,9 +57,8 @@ namespace HighlightingSystem
 		/// </param>
 		public void On(Color color)
 		{
-			// Set new color for one-frame highlighting
 			onceColor = color;
-			On();
+			once = true;
 		}
 		
 		/// <summary>
@@ -115,11 +101,11 @@ namespace HighlightingSystem
 		{
 			flashingColorMin = color1;
 			flashingColorMax = color2;
-			FlashingOn();
+			flashing = true;
 		}
 		
 		/// <summary>
-		/// Turn on flashing from color1 to color2 with given frequency.
+		/// Turn on flashing from color1 to color2 and specified frequency.
 		/// </summary>
 		/// <param name='color1'>
 		/// Starting color.
@@ -132,12 +118,14 @@ namespace HighlightingSystem
 		/// </param>
 		public void FlashingOn(Color color1, Color color2, float freq)
 		{
+			flashingColorMin = color1;
+			flashingColorMax = color2;
 			flashingFreq = freq;
-			FlashingOn(color1, color2);
+			flashing = true;
 		}
 		
 		/// <summary>
-		/// Turn on flashing with given frequency.
+		/// Turn on flashing with specified frequency.
 		/// </summary>
 		/// <param name='f'>
 		/// Flashing frequency (times per second).
@@ -145,7 +133,7 @@ namespace HighlightingSystem
 		public void FlashingOn(float freq)
 		{
 			flashingFreq = freq;
-			FlashingOn();
+			flashing = true;
 		}
 		
 		/// <summary>
@@ -163,7 +151,7 @@ namespace HighlightingSystem
 		{
 			flashing = !flashing;
 		}
-		
+
 		/// <summary>
 		/// Set constant highlighting color.
 		/// </summary>
@@ -176,74 +164,75 @@ namespace HighlightingSystem
 		}
 		
 		/// <summary>
-		/// Fade in constant highlighting.
+		/// Fade in constant highlighting using specified transition duration.
 		/// </summary>
-		public void ConstantOn()
+		/// <param name="time">
+		/// Transition time.
+		/// </param>
+		public void ConstantOn(float time = 0.25f)
 		{
-			// Enable constant highlighting
-			constantly = true;
-			// Start transition
-			transitionActive = true;
+			transitionTime = (time >= 0f ? time : 0f);
+			transitionTarget = 1f;
 		}
 		
 		/// <summary>
-		/// Fade in constant highlighting with given color.
+		/// Fade in constant highlighting using specified color and transition duration.
 		/// </summary>
-		/// <param name='color'>
+		/// <param name="color">
 		/// Constant highlighting color.
 		/// </param>
-		public void ConstantOn(Color color)
+		/// <param name="time">
+		/// Transition duration.
+		/// </param>
+		public void ConstantOn(Color color, float time = 0.25f)
 		{
-			// Set constant highlighting color
 			constantColor = color;
-			ConstantOn();
+			transitionTime = (time >= 0f ? time : 0f);
+			transitionTarget = 1f;
+		}
+
+		/// <summary>
+		/// Fade out constant highlighting using specified transition duration.
+		/// </summary>
+		/// <param name="time">
+		/// Transition time.
+		/// </param>
+		public void ConstantOff(float time = 0.25f)
+		{
+			transitionTime = (time >= 0f ? time : 0f);
+			transitionTarget = 0f;
 		}
 		
 		/// <summary>
-		/// Fade out constant highlighting.
+		/// Switch constant highlighting using specified transition duration.
 		/// </summary>
-		public void ConstantOff()
+		/// <param name="time">
+		/// Transition time.
+		/// </param>
+		public void ConstantSwitch(float time = 0.25f)
 		{
-			// Disable constant highlighting
-			constantly = false;
-			// Start transition
-			transitionActive = true;
+			transitionTime = (time >= 0f ? time : 0f);
+			transitionTarget = (transitionTarget > 0f ? 0f : 1f);
 		}
-		
-		/// <summary>
-		/// Switch Constant Highlighting.
-		/// </summary>
-		public void ConstantSwitch()
-		{
-			// Switch constant highlighting
-			constantly = !constantly;
-			// Start transition
-			transitionActive = true;
-		}
-		
+
 		/// <summary>
 		/// Turn on constant highlighting immediately (without fading in).
 		/// </summary>
 		public void ConstantOnImmediate()
 		{
-			constantly = true;
-			// Set transition value to 1
-			transitionValue = 1f;
-			// Stop transition
-			transitionActive = false;
+			transitionValue = transitionTarget = 1f;
 		}
 		
 		/// <summary>
-		/// Turn on constant highlighting with given color immediately (without fading in).
+		/// Turn on constant highlighting using specified color immediately (without fading in).
 		/// </summary>
 		/// <param name='color'>
 		/// Constant highlighting color.
 		/// </param>
 		public void ConstantOnImmediate(Color color)
 		{
-			// Set constant highlighting color
 			constantColor = color;
-			ConstantOnImmediate();
+			transitionValue = transitionTarget = 1f;
 		}
 		
 		/// <summary>
@@ -251,11 +240,7 @@ namespace HighlightingSystem
 		/// </summary>
 		public void ConstantOffImmediate()
 		{
-			constantly = false;
-			// Set transition value to 0
-			transitionValue = 0f;
-			// Stop transition
-			transitionActive = false;
+			transitionValue = transitionTarget = 0f;
 		}
 		
 		/// <summary>
@@ -263,73 +248,17 @@ namespace HighlightingSystem
 		/// </summary>
 		public void ConstantSwitchImmediate()
 		{
-			constantly = !constantly;
-			// Set transition value to the final value
-			transitionValue = constantly ? 1f : 0f;
-			// Stop transition
-			transitionActive = false;
+			transitionValue = transitionTarget = (transitionTarget > 0f ? 0f : 1f);
 		}
 
 		/// <summary>
-		/// Enable see-through mode
-		/// </summary>
-		public void SeeThroughOn()
-		{
-			seeThrough = true;
-		}
-		
-		/// <summary>
-		/// Disable see-through mode
-		/// </summary>
-		public void SeeThroughOff()
-		{
-			seeThrough = false;
-		}
-		
-		/// <summary>
-		/// Switch see-through mode
-		/// </summary>
-		public void SeeThroughSwitch()
-		{
-			seeThrough = !seeThrough;
-		}
-		
-		/// <summary>
-		/// Enable occluder mode. Occluders will be used only in case frame depth buffer is not accessible.
-		/// </summary>
-		public void OccluderOn()
-		{
-			occluder = true;
-		}
-		
-		/// <summary>
-		/// Disable occluder mode. Occluders will be used only in case frame depth buffer is not accessible.
-		/// </summary>
-		public void OccluderOff()
-		{
-			occluder = false;
-		}
-		
-		/// <summary>
-		/// Switch occluder mode. Occluders will be used only in case frame depth buffer is not accessible.
-		/// </summary>
-		public void OccluderSwitch()
-		{
-			occluder = !occluder;
-		}
-		
-		/// <summary>
-		/// Turn off all types of highlighting. 
+		/// Turn off all types of highlighting (occlusion mode remains intact). 
 		/// </summary>
 		public void Off()
 		{
 			once = false;
 			flashing = false;
-			constantly = false;
-			// Set transition value to 0
-			transitionValue = 0f;
-			// Stop transition
-			transitionActive = false;
+			transitionValue = transitionTarget = 0f;
 		}
 		
 		/// <summary>
@@ -338,6 +267,64 @@ namespace HighlightingSystem
 		public void Die()
 		{
 			Destroy(this);
+		}
+		#endregion
+
+		#region Deprecated Methods
+		/// <summary>
+		/// DEPRECATED. Use seeThrough property directly. Set see-through mode
+		/// </summary>
+		public void SeeThrough(bool state)
+		{
+			seeThrough = state;
+		}
+		
+		/// <summary>
+		/// DEPRECATED. Use seeThrough property directly. Enable see-through mode
+		/// </summary>
+		public void SeeThroughOn()
+		{
+			seeThrough = true;
+		}
+		
+		/// <summary>
+		/// DEPRECATED. Use seeThrough property directly. Disable see-through mode
+		/// </summary>
+		public void SeeThroughOff()
+		{
+			seeThrough = false;
+		}
+		
+		/// <summary>
+		/// DEPRECATED. Use seeThrough property directly. Switch see-through mode
+		/// </summary>
+		public void SeeThroughSwitch()
+		{
+			seeThrough = !seeThrough;
+		}
+
+		/// <summary>
+		/// DEPRECATED. Use occluder property directly. Enable occluder mode. Non-see-through occluders will be used only in case frame depth buffer is not accessible.
+		/// </summary>
+		public void OccluderOn()
+		{
+			occluder = true;
+		}
+		
+		/// <summary>
+		/// DEPRECATED. Use occluder property directly. Disable occluder mode. Non-see-through occluders will be used only in case frame depth buffer is not accessible.
+		/// </summary>
+		public void OccluderOff()
+		{
+			occluder = false;
+		}
+		
+		/// <summary>
+		/// DEPRECATED. Use occluder property directly. Switch occluder mode. Non-see-through occluders will be used only in case frame depth buffer is not accessible.
+		/// </summary>
+		public void OccluderSwitch()
+		{
+			occluder = !occluder;
 		}
 		#endregion
 	}

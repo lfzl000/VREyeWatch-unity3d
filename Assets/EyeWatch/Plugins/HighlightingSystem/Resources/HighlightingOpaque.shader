@@ -1,9 +1,9 @@
-﻿Shader "Hidden/Highlighted/Opaque"
+Shader "Hidden/Highlighted/Opaque"
 {
 	Properties
 	{
-		[HideInInspector] _ZTest ("", Float) = 8		// UnityEngine.Rendering.CompareFunction. 4 = LessEqual, 8 = Always
-		[HideInInspector] _StencilRef ("", Float) = 1
+		[HideInInspector] _ZTest ("", Int) = 8		// UnityEngine.Rendering.CompareFunction. 4 = LessEqual, 8 = Always
+		[HideInInspector] _StencilRef ("", Int) = 1
 	}
 	
 	SubShader
@@ -29,21 +29,21 @@
 			#pragma fragmentoption ARB_precision_hint_fastest
 			#include "UnityCG.cginc"
 			
-			uniform fixed4 _Outline;
+			uniform fixed4 _Color;
 			
 			struct appdata_vert
 			{
 				float4 vertex : POSITION;
 			};
 			
-			float4 vert(appdata_vert v) : POSITION
+			float4 vert(appdata_vert v) : SV_POSITION
 			{
 				return mul(UNITY_MATRIX_MVP, v.vertex);
 			}
 			
-			fixed4 frag() : COLOR
+			fixed4 frag() : SV_Target
 			{
-				return _Outline;
+				return _Color;
 			}
 			ENDCG
 		}

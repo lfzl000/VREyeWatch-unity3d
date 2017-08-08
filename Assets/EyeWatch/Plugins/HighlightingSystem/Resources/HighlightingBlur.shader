@@ -1,4 +1,4 @@
-﻿Shader "Hidden/Highlighted/Blur"
+Shader "Hidden/Highlighted/Blur"
 {
 	Properties
 	{
@@ -24,15 +24,15 @@
 			#include "UnityCG.cginc"
 			
 			uniform sampler2D _MainTex;
-			uniform half4 _MainTex_TexelSize;
+			uniform float4 _MainTex_TexelSize;
 			
-			uniform half _HighlightingBlurOffset;
+			uniform float _HighlightingBlurOffset;
 			uniform half _Intensity;
 			
 			struct v2f
 			{
-				float4 pos : POSITION;
-				half2 uv[4] : TEXCOORD0;	// 8 to add straight directions
+				float4 pos : SV_POSITION;
+				float2 uv[4] : TEXCOORD0;	// 8 to add straight directions
 			};
 			
 			v2f vert (appdata_img v)
@@ -40,7 +40,7 @@
 				// Shader code optimized for the Unity shader compiler
 				v2f o;
 				o.pos = mul(UNITY_MATRIX_MVP, v.vertex);
-				half2 offs = _HighlightingBlurOffset * _MainTex_TexelSize.xy;
+				float2 offs = _HighlightingBlurOffset * _MainTex_TexelSize.xy;
 				
 				// Diagonal directions
 				o.uv[0].x = v.texcoord.x - offs.x;
@@ -73,7 +73,7 @@
 				return o;
 			}
 			
-			half4 frag(v2f i) : COLOR
+			half4 frag(v2f i) : SV_Target
 			{
 				int start = 0;
 				int end = 4;
